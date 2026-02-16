@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>flappy bird · redemption flower</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      background: #1b2a32;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+      padding: 10px;
+    }
+    .game-container {
+      background: #0f1a1f;
+      border-radius: 36px;
+      padding: 16px;
+      box-shadow: 0 25px 40px rgba(0,0,0,0.6);
+      border: 3px solid #415a64;
+      max-width: 500px;
+      width: 100%;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 24px;
+      background: #1f4a5c;
+      box-shadow: inset 0 0 0 2px #6b9eb0, 0 10px 15px -5px #030b0f;
+      cursor: pointer;
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+<div class="game-container">
+  <canvas id="gameCanvas" width="360" height="640"></canvas>
+</div>
+
+<script>
+  (function() {
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // dimensions
+    const CANVAS_W = 360;
+    const CANVAS_H = 640;
+
+    // ===== GAME CONSTANTS =====
+    const GRAVITY = 0.35;           
+    const LIFT = -8.0;              
+    const MAX_VELOCITY = 12.0;      
+    const PIPE_WIDTH = 48;
+    const PIPE_GAP = 135;
+    const PIPE_SPACING = 280;
+    const GROUND_HEIGHT = 60;
+    const SKY_CEILING = 20;
+    const BIRD_RADIUS = 16;
+    const PIPE_SPEED = 3.8;
+
+    // main bird
+    let bird = {
+      x: 70,
+      y: CANVAS_H / 2,
+      vy: 0,
+      rotation: 0,
+      wingPhase: 0
+    };
+
+    let pipes = [];
+    let score = 0;
+    let bestScore = 0;
+
+    // gameState: 'ready', 'playing', 'gameover', 'easter', 'falling'
+    let gameState = 'ready';
+
+    // load best
+    try {
+      const saved = localStorage.getItem('flappyBest_redemption');
+      if (saved) bestScore = parseInt(saved) || 0;
+    } catch(e) {}
+
+    // background birds
+    let bgBirds = [];
+    const BG_BIRD_COUNT = 3;
+    function initBgBirds() {
+      for (let i = 0; i < BG_BIRD_COUNT; i++) {
+        bgBirds.push({
+          x: Math.random() * CANVAS_W,
+          y: Math.random() * (CANVAS_H - GROUND_HEIGHT - 100) + 50,
+          speed: 0.5 + Math.random() * 1.2,
+          size: 8 + Math.random() * 8,
+          wingPhase: Math.random() * Math.PI * 2,
+          flapSpeed: 0.1 + Math.random() * 0.15
+        });
+      }
+    }
+    initBgBirds();
+
+    function updateBgBirds() {
+      for (let b of bgBirds) {
+        b.x += b.speed;
+        b.wingPhase += b.flapSpeed;
+        if (b.x > CANVAS_W + 30) {
+          b.x = -30;
+          b.y = Math.random() * (CANVAS_H - GROUND_HEIGHT - 100) + 50;
+        }
+      }
+    }
+
+    // button regions
+    let buttonRect = { x: 0, y: 0, w: 140, h: 50 }; // for ready/gameover
+    let easterContinueRect = { x: 60, y: 400, w: 100, h: 40 };
+    let easterGoRect = { x: 200, y: 400, w: 120, h: 40 };
+
+    // ===== EASTER EGG ANIMATION =====
+    let specialBird = {
+      x: 0, y: 0,
+      targetX: 0,
+      targetY: 0,
+      phase: 'entering', // 'entering', 'waiting', 'exiting'
+      flowerBob: 0,
+      speed: 2.5
+    };
+
+    // Store original bird position when easter starts
+    let birdStartPos = { x: 0, y: 0 };
+
+    // Fade effect for "Go with bird"
+    let fadeAlpha = 0;
+    const FADE_SPEED = 0.02;
+
+    // ===== CRYING AND DARKNESS =====
+    let crying = false;
+    let darknessActive = false;
+    let darknessLevel = 0; // 0 to 1
+    const DARKNESS_INCREASE_RATE = 0.0005; // per frame
+
+    // ===== REDEMPTION FLOWER =====
+    let flower = {
+      active: false,
+      x: 0,
+      y: 0,
+      radius: 8,
+      collected: false
+    };
+    let spawnFlowerNextPipe = false; // flag to put flower on next pipe
+
+    // ===== ANIMATED CLOUDS =====
+    let clouds = [
+      { baseX: 70, baseY: 55, radius: 30, speed: 0.05, offset: 0 },
+      { baseX: 100, baseY: 40, radius: 26, speed: 0.03, offset: 1 },
+      { baseX: 120, baseY: 65, radius: 28, speed: 0.04, offset: 2 },
+      { baseX: 50, baseY: 75, radius: 24, speed: 0.06, offset: 0.5 },
+      { baseX: 85, baseY: 80, radius: 22, speed: 0.02, offset: 1.2 },
+      { baseX: 200, baseY: 35, radius: 32, speed: 0.05, offset: 0 },
+      { baseX: 230, baseY: 45, radius: 30, speed: 0.03, offset: 1.5 },
+      { baseX: 260, baseY: 25, radius: 28, speed: 0.04, offset: 2.2 },
+      { baseX: 180, baseY: 50, radius: 24, speed: 0.06, offset: 0.8 },
+      { baseX: 215, baseY: 60, radius: 26, speed: 0.02, offset: 1.8 },
+      { baseX: 310, baseY: 80, radius: 28, speed: 0.05, offset: 0.3 },
+      { baseX: 335, baseY: 65, radius: 30, speed: 0.03, offset: 1.1 },
+      { baseX: 295, baseY: 100, radius: 24, speed: 0.04, offset: 2.5 },
+      { baseX: 350, baseY: 95, radius: 22, speed: 0.06, offset: 0.6 },
+      { baseX: 150, baseY: 105, radius: 24, speed: 0.02, offset: 1.4 },
+      { baseX: 175, baseY: 95, radius: 20, speed: 0.03, offset: 2.0 },
+      { baseX: 130, baseY: 90, radius: 18, speed: 0.04, offset: 0.9 }
+    ];
+
+    function updateClouds() {
+      for (let c of clouds) {
+        c.offset += 0.01;
+        c.currentX = c.baseX + Math.sin(c.offset) * 5;
+      }
+    }
+
+    function spawnPipe() {
+      const minGapY = 80;
+      const maxGapY = CANVAS_H - GROUND_HEIGHT - PIPE_GAP - 60;
+      const gapY = Math.floor(Math.random() * (maxGapY - minGapY + 1)) + minGapY;
+      let newPipe = {
+        x: CANVAS_W,
+        topY: 0,
+        bottomY: gapY + PIPE_GAP,
+        gapTop: gapY,
+        passed: false
+      };
+      pipes.push(newPipe);
+
+      // If we need to spawn a redemption flower on this pipe
+      if (spawnFlowerNextPipe && darknessActive && !flower.active) {
+        flower.active = true;
+        flower.x = newPipe.x + PIPE_WIDTH / 2;
+        flower.y = newPipe.gapTop + PIPE_GAP / 2; // center of gap
+        flower.collected = false;
+        spawnFlowerNextPipe = false;
+      }
+    }
+
+    function resetGame(keepScore = false) {
+      bird.y = CANVAS_H / 2;
+      bird.vy = 0;
+      bird.rotation = 0;
+      bird.wingPhase = 0;
+      pipes = [];
+      if (!keepScore) score = 0;
+      crying = false;
+      darknessActive = false;
+      darknessLevel = 0;
+      flower.active = false;
+      spawnFlowerNextPipe = false;
+      gameState = 'ready';
+      fadeAlpha = 0;
+    }
+
+    function checkCollisions() {
+      if (bird.y + BIRD_RADIUS >= CANVAS_H - GROUND_HEIGHT) return true;
+      if (bird.y - BIRD_RADIUS <= SKY_CEILING) return true;
+      for (let p of pipes) {
+        if (bird.x + BIRD_RADIUS > p.x && bird.x - BIRD_RADIUS < p.x + PIPE_WIDTH) {
+          if (bird.y - BIRD_RADIUS < p.gapTop || bird.y + BIRD_RADIUS > p.bottomY) return true;
+        }
+      }
+      return false;
+    }
+
+    function checkFlowerCollision() {
+      if (!flower.active || flower.collected) return false;
+      // Simple circle collision
+      let dx = bird.x - flower.x;
+      let dy = bird.y - flower.y;
+      let dist = Math.sqrt(dx*dx + dy*dy);
+      return dist < BIRD_RADIUS + flower.radius;
+    }
+
+    function updateScore() {
+      for (let p of pipes) {
+        if (!p.passed && p.x + PIPE_WIDTH < bird.x) {
+          p.passed = true;
+          score++;
+          if (score > bestScore) {
+            bestScore = score;
+            try { localStorage.setItem('flappyBest_redemption', bestScore); } catch(e) {}
+          }
+        }
+      }
+    }
+
+    function managePipes() {
+      if (gameState !== 'playing') return;
+      if (pipes.length === 0) {
+        spawnPipe();
+      } else {
+        const lastPipe = pipes[pipes.length - 1];
+        if (lastPipe.x < CANVAS_W - PIPE_SPACING) spawnPipe();
+      }
+      for (let i = pipes.length - 1; i >= 0; i--) {
+        pipes[i].x -= PIPE_SPEED;
+        // Move flower along with its pipe (if active and not collected)
+        if (flower.active && !flower.collected) {
+          // Assuming flower belongs to the last pipe? Actually we need to track which pipe.
+          // For simplicity, we'll just move the flower at same speed.
+          flower.x -= PIPE_SPEED;
+        }
+        if (pipes[i].x + PIPE_WIDTH < 0) {
+          pipes.splice(i, 1);
+          // If the pipe with flower goes off screen, remove flower
+          if (flower.active && !flower.collected) {
+            flower.active = false;
+          }
+        }
+      }
+    }
+
+    function flap() {
+      if (gameState === 'playing') {
+        bird.vy = LIFT;
+        bird.rotation = -0.5;
+      }
+    }
+
+    function startGame() {
+      if (gameState === 'ready') {
+        gameState = 'playing';
+        bird.vy = LIFT * 0.8;
+        bird.rotation = -0.3;
+      }
+    }
+
+    function restartGame() {
+      resetGame(false);
+    }
+
+    function updateBird() {
+      if (gameState !== 'playing' && gameState !== 'falling') return;
+      bird.vy += GRAVITY;
+      if (bird.vy > MAX_VELOCITY) bird.vy = MAX_VELOCITY;
+      bird.y += bird.vy;
+      let targetRot = bird.vy * 0.12;
+      if (targetRot > 0.7) targetRot = 0.7;
+      if (targetRot < -0.6) targetRot = -0.6;
+      bird.rotation += (targetRot - bird.rotation) * 0.1;
+      bird.wingPhase += 0.3;
+    }
+
+    // ----- drawing functions -----
+    function drawBackground() {
+      const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+      grad.addColorStop(0, '#7ec8e0');
+      grad.addColorStop(0.7, '#e0c58f');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H - GROUND_HEIGHT);
+
+      // Sun with rotating rays
+      ctx.save();
+      ctx.shadowColor = '#ffdd88';
+      ctx.shadowBlur = 30;
+      ctx.beginPath();
+      ctx.arc(290, 70, 32, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffdb7c';
+      ctx.fill();
+      ctx.shadowBlur = 20;
+      ctx.beginPath();
+      ctx.arc(290, 70, 22, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffe68f';
+      ctx.fill();
+      ctx.shadowBlur = 15;
+      ctx.strokeStyle = '#ffecaa';
+      ctx.lineWidth = 4;
+      let time = Date.now() * 0.002;
+      for (let i = 0; i < 8; i++) {
+        let angle = i * Math.PI / 4 + time;
+        let dx = Math.cos(angle) * 40;
+        let dy = Math.sin(angle) * 40;
+        ctx.beginPath();
+        ctx.moveTo(290 + dx * 0.5, 70 + dy * 0.5);
+        ctx.lineTo(290 + dx, 70 + dy);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Animated clouds
+      ctx.shadowColor = '#00000040';
+      ctx.shadowBlur = 20;
+      ctx.shadowOffsetY = 3;
+      
+      function drawCloudPart(x, y, radius, color1, color2) {
+        let grad = ctx.createRadialGradient(x-5, y-5, 5, x, y, radius);
+        grad.addColorStop(0, color1);
+        grad.addColorStop(1, color2);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 0.95;
+      for (let c of clouds) {
+        drawCloudPart(c.currentX || c.baseX, c.baseY, c.radius, '#ffffff', '#e0e0e0');
+      }
+
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.globalAlpha = 1;
+    }
+
+    function drawBgBirds() {
+      ctx.fillStyle = '#2d4f5e';
+      ctx.shadowColor = '#00000030';
+      ctx.shadowBlur = 4;
+      for (let b of bgBirds) {
+        ctx.save();
+        ctx.translate(b.x, b.y);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, b.size * 0.5, b.size * 0.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        let wingFlap = Math.sin(b.wingPhase) * 0.3;
+        ctx.beginPath();
+        ctx.ellipse(-b.size * 0.3, -b.size * 0.1, b.size * 0.4, b.size * 0.2, -0.2 + wingFlap, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(b.size * 0.4, -b.size * 0.1, b.size * 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.shadowBlur = 0;
+    }
+
+    // Grass
+    function drawGround() {
+      const groundTop = CANVAS_H - GROUND_HEIGHT;
+
+      const dirtGrad = ctx.createLinearGradient(0, groundTop, 0, CANVAS_H);
+      dirtGrad.addColorStop(0, '#7a5a3c');
+      dirtGrad.addColorStop(0.7, '#5d3f28');
+      ctx.fillStyle = dirtGrad;
+      ctx.fillRect(0, groundTop, CANVAS_W, GROUND_HEIGHT);
+
+      ctx.fillStyle = '#3e2f1d';
+      ctx.fillRect(0, groundTop - 2, CANVAS_W, 4);
+
+      ctx.shadowBlur = 4;
+      ctx.lineWidth = 1.8;
+      const time = Date.now() * 0.005;
+
+      for (let i = 0; i < 20; i++) {
+        let baseX = (i * 18 + time * 0.2) % (CANVAS_W + 30) - 15;
+        let sway = Math.sin(i * 0.8 + time * 1.5) * 1.5;
+        let x1 = baseX + sway;
+        let x2 = baseX + 5 + sway * 0.5;
+        let height1 = 12 + Math.sin(i * 0.9 + time * 1.2) * 3;
+        let height2 = 10 + Math.cos(i * 1.2 + time * 1.2) * 2;
+
+        if (i % 2 === 0) ctx.strokeStyle = '#3f9142';
+        else ctx.strokeStyle = '#5fb85f';
+
+        ctx.beginPath();
+        ctx.moveTo(x1, groundTop - 2);
+        ctx.lineTo(x1 - 2, groundTop - height1);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(x2, groundTop - 3);
+        ctx.lineTo(x2 + 2, groundTop - height2 + 2);
+        ctx.stroke();
+      }
+
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < 10; i++) {
+        let baseX = (i * 30 + time * 0.15) % (CANVAS_W + 20) - 10;
+        ctx.strokeStyle = '#4caf50';
+        ctx.beginPath();
+        ctx.moveTo(baseX, groundTop - 1);
+        ctx.lineTo(baseX - 2, groundTop - 6);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(baseX + 6, groundTop - 2);
+        ctx.lineTo(baseX + 8, groundTop - 5);
+        ctx.stroke();
+      }
+
+      const grassTopGrad = ctx.createLinearGradient(0, groundTop - 10, 0, groundTop);
+      grassTopGrad.addColorStop(0, '#a5d6a5');
+      grassTopGrad.addColorStop(1, '#6f9e6f');
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = grassTopGrad;
+      ctx.fillRect(0, groundTop - 8, CANVAS_W, 10);
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = '#3e2f1d';
+      ctx.fillRect(0, CANVAS_H - 8, CANVAS_W, 8);
+      ctx.shadowBlur = 0;
+    }
+
+    function drawPipes() {
+      for (let p of pipes) {
+        ctx.fillStyle = '#2f7d4f';
+        ctx.shadowColor = '#0f3a1e';
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 4;
+        ctx.fillRect(p.x, 0, PIPE_WIDTH, p.gapTop);
+        ctx.fillStyle = '#3e9f64';
+        ctx.shadowBlur = 5;
+        ctx.fillRect(p.x - 6, p.gapTop - 30, PIPE_WIDTH + 12, 30);
+        ctx.fillStyle = '#2f7d4f';
+        ctx.fillRect(p.x, p.bottomY, PIPE_WIDTH, CANVAS_H - GROUND_HEIGHT - p.bottomY + 5);
+        ctx.fillStyle = '#3e9f64';
+        ctx.fillRect(p.x - 6, p.bottomY, PIPE_WIDTH + 12, 30);
+        ctx.fillStyle = '#1f5c39';
+        ctx.globalAlpha = 0.3;
+        ctx.fillRect(p.x + 5, 0, 8, p.gapTop);
+        ctx.fillRect(p.x + 5, p.bottomY, 8, CANVAS_H - GROUND_HEIGHT - p.bottomY);
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+      }
+    }
+
+    function drawFlower() {
+      if (!flower.active || flower.collected) return;
+      ctx.save();
+      ctx.translate(flower.x, flower.y);
+      // Draw a small flower (similar to the one on special bird)
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = '#ff69b4';
+      ctx.beginPath();
+      ctx.arc(0, 0, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ff4d6d';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(-3, -3, 4, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffb3c6';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(3, -3, 4, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(-3, 3, 4, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(3, 3, 4, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffe066';
+      ctx.fill();
+      ctx.restore();
+      ctx.shadowBlur = 0;
+    }
+
+    function drawBirdAt(x, y, rotation, wingPhase, scale = 1, withFlower = false, flowerBob = 0, crying = false) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotation);
+      ctx.scale(scale, scale);
+      const bodyGrad = ctx.createRadialGradient(-6, -6, 5, 0, 0, BIRD_RADIUS + 4);
+      bodyGrad.addColorStop(0, '#f7cf4d');
+      bodyGrad.addColorStop(0.7, '#d49b3b');
+      ctx.fillStyle = bodyGrad;
+      ctx.shadowColor = '#402d1a';
+      ctx.shadowBlur = 12;
+      ctx.shadowOffsetY = 3;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, BIRD_RADIUS, BIRD_RADIUS * 0.85, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 8;
+      const wingAngle = Math.sin(wingPhase) * 0.6;
+      ctx.fillStyle = '#bb7d38';
+      ctx.beginPath();
+      ctx.ellipse(-6 + Math.sin(wingPhase) * 3, -2, BIRD_RADIUS * 0.7, BIRD_RADIUS * 0.4, 0.3 + wingAngle * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.arc(6, -5, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = 'white';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(8, -6, 2.2, 0, 2 * Math.PI);
+      ctx.fillStyle = '#080808';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(9, -7, 0.8, 0, 2 * Math.PI);
+      ctx.fillStyle = 'white';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(15, -5);
+      ctx.lineTo(24, -3);
+      ctx.lineTo(16, 0);
+      ctx.closePath();
+      ctx.fillStyle = '#e5ac3a';
+      ctx.shadowBlur = 6;
+      ctx.fill();
+      ctx.shadowBlur = 4;
+      ctx.beginPath();
+      ctx.moveTo(5, 10);
+      ctx.lineTo(12, 18);
+      ctx.lineTo(0, 16);
+      ctx.fillStyle = '#b55d1a';
+      ctx.fill();
+
+      // Tears if crying
+      if (crying) {
+        let tearBob = Math.sin(Date.now() * 0.01) * 1.5;
+        ctx.fillStyle = '#88ccff';
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = '#2266aa';
+        ctx.beginPath();
+        ctx.arc(6, 2 + tearBob, 2, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(10, 5 + tearBob, 1.5, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      if (withFlower) {
+        ctx.restore();
+        ctx.save();
+        ctx.translate(x, y);
+        let flowerX = 10 * scale;
+        let flowerY = (-22 + Math.sin(flowerBob) * 2) * scale;
+        ctx.beginPath();
+        ctx.arc(flowerX, flowerY, 5 * scale, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ff4d6d';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(flowerX - 4 * scale, flowerY - 4 * scale, 4 * scale, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffb3c6';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(flowerX + 4 * scale, flowerY - 4 * scale, 4 * scale, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(flowerX - 4 * scale, flowerY + 4 * scale, 4 * scale, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(flowerX + 4 * scale, flowerY + 4 * scale, 4 * scale, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(flowerX, flowerY, 3 * scale, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ffe066';
+        ctx.fill();
+        ctx.restore();
+      } else {
+        ctx.restore();
+      }
+      ctx.shadowBlur = 0;
+    }
+
+    function drawBird() {
+      drawBirdAt(bird.x, bird.y, bird.rotation, bird.wingPhase, 1, false, 0, crying);
+    }
+
+    // Score panel
+    function drawScorePanel() {
+      const panelX = (CANVAS_W - 100) / 2;
+      const panelY = 15;
+      const panelW = 100;
+      const panelH = 50;
+
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = '#00000080';
+      ctx.shadowOffsetY = 4;
+      const grad = ctx.createLinearGradient(panelX, panelY, panelX, panelY + panelH);
+      grad.addColorStop(0, '#334d5c');
+      grad.addColorStop(1, '#1d3640');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.roundRect(panelX, panelY, panelW, panelH, 20);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#7fa5b5';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.font = 'bold 36px "Segoe UI", monospace';
+      ctx.fillStyle = '#fef7d2';
+      ctx.shadowColor = '#0a1a24';
+      ctx.shadowBlur = 8;
+      ctx.fillText(score, panelX + 28, panelY + 40);
+      ctx.shadowBlur = 0;
+    }
+
+    function drawButton(text, x, y, w, h, bgColor, textColor) {
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = '#00000060';
+      ctx.shadowOffsetY = 4;
+      ctx.fillStyle = bgColor;
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, 25);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.strokeStyle = '#ffffffb0';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.font = 'bold 22px "Segoe UI", sans-serif';
+      ctx.fillStyle = textColor;
+      ctx.shadowColor = '#00000080';
+      ctx.shadowBlur = 6;
+      ctx.fillText(text, x + 15, y + 28);
+      ctx.shadowBlur = 0;
+    }
+
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+      if (w < 2 * r) r = w / 2;
+      if (h < 2 * r) r = h / 2;
+      this.moveTo(x + r, y);
+      this.lineTo(x + w - r, y);
+      this.quadraticCurveTo(x + w, y, x + w, y + r);
+      this.lineTo(x + w, y + h - r);
+      this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      this.lineTo(x + r, y + h);
+      this.quadraticCurveTo(x, y + h, x, y + h - r);
+      this.lineTo(x, y + r);
+      this.quadraticCurveTo(x, y, x + r, y);
+      this.closePath();
+      return this;
+    };
+
+    function drawReady() {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = '#211c14';
+      ctx.fillRect(20, 140, CANVAS_W - 40, 260);
+      ctx.globalAlpha = 1;
+      ctx.font = 'bold 36px "Segoe UI", "Arial Black", sans-serif';
+      ctx.fillStyle = '#fcdb6a';
+      ctx.shadowColor = '#b45f2b';
+      ctx.shadowBlur = 10;
+      ctx.fillText('FLAPPY', 70, 220);
+      ctx.fillText('BIRD', 100, 280);
+      drawBirdAt(260, 230, 0.1, 2.5, 0.7);
+      ctx.font = 'bold 22px monospace';
+      ctx.fillStyle = '#f5e6d3';
+      ctx.fillText(`best: ${bestScore}`, 120, 350);
+      ctx.shadowBlur = 0;
+      const btnX = (CANVAS_W - 140) / 2;
+      const btnY = 390;
+      buttonRect = { x: btnX, y: btnY, w: 140, h: 50 };
+      drawButton('START', btnX, btnY, 140, 50, '#4fa86b', '#121f26');
+    }
+
+    function drawGameOver() {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = '#211c14';
+      ctx.fillRect(30, 200, CANVAS_W - 60, 180);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#fcdba0';
+      ctx.font = 'bold 28px "Segoe UI", sans-serif';
+      ctx.shadowColor = '#8b0000';
+      ctx.shadowBlur = 10;
+      ctx.fillText('GAME OVER', 70, 270);
+      ctx.font = 'bold 24px monospace';
+      ctx.fillStyle = '#f5e6d3';
+      ctx.fillText(`score: ${score}`, 100, 330);
+      ctx.fillText(`best: ${bestScore}`, 100, 370);
+      ctx.shadowBlur = 0;
+      const btnX = (CANVAS_W - 140) / 2;
+      const btnY = 420;
+      buttonRect = { x: btnX, y: btnY, w: 140, h: 50 };
+      drawButton('RESTART', btnX, btnY, 140, 50, '#db9f3f', '#121f26');
+    }
+
+    // Easter egg screen with meeting and fade
+    function drawEaster() {
+      // Update animations
+      specialBird.flowerBob += 0.1;
+
+      if (specialBird.phase === 'entering') {
+        // Move special bird from right to target (player's position)
+        if (Math.abs(specialBird.x - specialBird.targetX) > 2) {
+          if (specialBird.x < specialBird.targetX) {
+            specialBird.x += specialBird.speed;
+          } else {
+            specialBird.x -= specialBird.speed;
+          }
+        } else {
+          specialBird.phase = 'waiting';
+        }
+        // Also adjust y
+        if (Math.abs(specialBird.y - specialBird.targetY) > 2) {
+          if (specialBird.y < specialBird.targetY) {
+            specialBird.y += specialBird.speed * 0.8;
+          } else {
+            specialBird.y -= specialBird.speed * 0.8;
+          }
+        }
+      } else if (specialBird.phase === 'exiting') {
+        // Move both birds left
+        specialBird.x -= specialBird.speed;
+        bird.x -= specialBird.speed;
+        // Increase fade
+        if (fadeAlpha < 1) {
+          fadeAlpha += FADE_SPEED;
+        } else {
+          // When fully faded, end game
+          gameState = 'gameover';
+        }
+      }
+
+      // Draw background elements
+      drawBackground();
+      drawBgBirds();
+      drawPipes();
+      drawGround();
+      drawFlower(); // in case flower is still active? but unlikely during easter
+
+      // Draw the two birds (main bird may be crying if already set)
+      drawBirdAt(bird.x, bird.y, bird.rotation, bird.wingPhase, 1, false, 0, crying);
+      drawBirdAt(specialBird.x, specialBird.y, 0.2, bird.wingPhase, 1.2, true, specialBird.flowerBob);
+
+      // If waiting, show buttons and message
+      if (specialBird.phase === 'waiting') {
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = '#0f1a1f';
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.globalAlpha = 1;
+
+        ctx.font = 'bold 24px "Segoe UI", sans-serif';
+        ctx.fillStyle = '#f5e6d3';
+        ctx.shadowColor = '#000000';
+        ctx.shadowBlur = 10;
+        ctx.fillText('A friendly bird appears!', 50, 200);
+        ctx.shadowBlur = 0;
+
+        easterContinueRect = { x: 60, y: 400, w: 100, h: 40 };
+        easterGoRect = { x: 200, y: 400, w: 120, h: 40 };
+        drawButton('Continue', 60, 400, 100, 40, '#4fa86b', '#121f26');
+        drawButton('Go with bird', 200, 400, 120, 40, '#db9f3f', '#121f26');
+      }
+
+      // Apply fade overlay if exiting
+      if (specialBird.phase === 'exiting' && fadeAlpha > 0) {
+        ctx.globalAlpha = fadeAlpha;
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Input handling
+    function handleCanvasClick(e) {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      let clientX, clientY;
+      if (e.touches) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+      const canvasX = (clientX - rect.left) * scaleX;
+      const canvasY = (clientY - rect.top) * scaleY;
+
+      if (gameState === 'ready') {
+        if (canvasX >= buttonRect.x && canvasX <= buttonRect.x + buttonRect.w &&
+            canvasY >= buttonRect.y && canvasY <= buttonRect.y + buttonRect.h) {
+          startGame();
+        }
+      } else if (gameState === 'gameover') {
+        if (canvasX >= buttonRect.x && canvasX <= buttonRect.x + buttonRect.w &&
+            canvasY >= buttonRect.y && canvasY <= buttonRect.y + buttonRect.h) {
+          restartGame();
+        }
+      } else if (gameState === 'playing') {
+        flap();
+      } else if (gameState === 'easter' && specialBird.phase === 'waiting') {
+        // Only process buttons during waiting phase
+        if (canvasX >= easterContinueRect.x && canvasX <= easterContinueRect.x + easterContinueRect.w &&
+            canvasY >= easterContinueRect.y && canvasY <= easterContinueRect.y + easterContinueRect.h) {
+          // Continue: reset world but keep score, start crying and darkness
+          pipes = [];
+          bird.y = CANVAS_H / 2;
+          bird.vy = 0;
+          bird.rotation = 0;
+          crying = true;
+          darknessActive = true;
+          darknessLevel = 0;
+          // Set flag to spawn redemption flower when score reaches 26
+          spawnFlowerNextPipe = true;
+          gameState = 'playing';
+        } else if (canvasX >= easterGoRect.x && canvasX <= easterGoRect.x + easterGoRect.w &&
+                   canvasY >= easterGoRect.y && canvasY <= easterGoRect.y + easterGoRect.h) {
+          // Go with bird: start exit animation and fade
+          specialBird.phase = 'exiting';
+          fadeAlpha = 0;
+        }
+      }
+    }
+
+    canvas.addEventListener('click', handleCanvasClick);
+    canvas.addEventListener('touchstart', handleCanvasClick, { passive: false });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Game loop
+    function gameLoop() {
+      if (gameState === 'playing') {
+        updateBird();
+        managePipes();
+        updateScore();
+
+        // Darkness increase
+        if (darknessActive && darknessLevel < 1) {
+          darknessLevel += DARKNESS_INCREASE_RATE;
+          if (darknessLevel > 1) darknessLevel = 1;
+        }
+
+        // Check for 366 points to trigger auto-fall
+        if (score >= 366) {
+          pipes = [];
+          gameState = 'falling';
+        }
+
+        // Check flower collision
+        if (checkFlowerCollision()) {
+          // Collect flower: remove curse
+          crying = false;
+          darknessActive = false;
+          darknessLevel = 0;
+          flower.active = false;
+          flower.collected = true;
+        }
+
+        // Regular collision check
+        if (checkCollisions()) {
+          if (score === 14) {
+            // Trigger easter egg
+            gameState = 'easter';
+            birdStartPos.x = bird.x;
+            birdStartPos.y = bird.y;
+            specialBird.x = CANVAS_W + 50;
+            specialBird.y = 300;
+            specialBird.targetX = bird.x - 10;
+            specialBird.targetY = bird.y;
+            specialBird.phase = 'entering';
+            specialBird.flowerBob = 0;
+            fadeAlpha = 0;
+          } else {
+            gameState = 'gameover';
+          }
+        }
+      } else if (gameState === 'falling') {
+        // Bird falls with gravity, no pipes
+        updateBird();
+        // Darkness continues
+        if (darknessActive && darknessLevel < 1) {
+          darknessLevel += DARKNESS_INCREASE_RATE;
+          if (darknessLevel > 1) darknessLevel = 1;
+        }
+        // Check ground collision
+        if (bird.y + BIRD_RADIUS >= CANVAS_H - GROUND_HEIGHT) {
+          gameState = 'gameover';
+        }
+      } else {
+        bird.wingPhase += 0.15; // idle wing flapping
+      }
+      updateBgBirds();
+      updateClouds();
+
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+      if (gameState === 'playing' || gameState === 'falling') {
+        drawBackground();
+        drawBgBirds();
+        drawPipes();
+        drawFlower(); // draw redemption flower if active
+        drawGround();
+        drawBird();
+        drawScorePanel();
+      } else if (gameState === 'ready') {
+        drawBackground();
+        drawBgBirds();
+        drawPipes();
+        drawGround();
+        drawBird();
+        drawReady();
+      } else if (gameState === 'gameover') {
+        drawBackground();
+        drawBgBirds();
+        drawPipes();
+        drawGround();
+        drawBird();
+        drawGameOver();
+      } else if (gameState === 'easter') {
+        drawEaster();
+      }
+
+      // Apply darkness overlay if active (for playing, falling, gameover?)
+      if (darknessActive && (gameState === 'playing' || gameState === 'falling' || gameState === 'gameover')) {
+        ctx.globalAlpha = darknessLevel * 0.7; // semi-transparent dark
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.globalAlpha = 1;
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    resetGame(false);
+    gameLoop();
+  })();
+</script>
+</body>
+</html>
